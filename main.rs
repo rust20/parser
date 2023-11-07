@@ -1,5 +1,9 @@
+use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::env;
 use std::fs;
+use std::process::exit;
+use std::time::Instant;
 use std::usize;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -165,11 +169,10 @@ impl Scanner {
                         }
                         self.line_pos = 0;
                         self.line += 1;
-
                     } else {
                         self.push_token(TokenKind::Div)
                     }
-                },
+                }
                 b'%' => self.push_token(TokenKind::Mod),
 
                 b'<' => {
@@ -549,11 +552,6 @@ fn expr_printer(expr: &ExprType, level: usize) {
     }
 }
 
-struct Parser {
-    stream: Vec<Token>,
-    cursor: usize,
-}
-
 #[allow(unused_macros)]
 macro_rules! dbg_pos {
     ($a:expr) => {{
@@ -578,9 +576,23 @@ macro_rules! expect {
     }};
 }
 
+struct Parser {
+    stream: Vec<Token>,
+    cursor: usize,
+    var_name_stack: VecDeque<HashSet<String>>,
+    reg_name_stack: VecDeque<HashSet<String>>,
+    fun_name_set: HashSet<String>,
+}
+
 impl Parser {
     pub fn new(stream: Vec<Token>) -> Self {
-        Self { stream, cursor: 0 }
+        Self {
+            stream,
+            cursor: 0,
+            var_name_stack: VecDeque::new(),
+            reg_name_stack: VecDeque::new(),
+            fun_name_set: HashSet::new(),
+        }
     }
 
     fn current(&self) -> &TokenKind {
@@ -599,12 +611,19 @@ impl Parser {
         &res.token_type
     }
 
-    fn parse_iterative(&mut self) -> Node {
-        return Node::Empty;
+    #[allow(dead_code)]
+    fn load(&mut self, stream: Vec<Token>) {
+        self.stream = stream;
     }
 
-    fn parse(&mut self) -> Node {
-        self.program()
+    fn reset(&mut self) {
+        self.cursor = 0;
+        self.var_name_stack = VecDeque::new();
+        self.reg_name_stack = VecDeque::new();
+        self.fun_name_set = HashSet::new();
+
+        self.var_name_stack.push_back(HashSet::new());
+        self.reg_name_stack.push_back(HashSet::new());
     }
 
     fn is_end(&self) -> bool {
@@ -615,16 +634,48 @@ impl Parser {
         &self.stream[self.cursor - 1].token_type
     }
 
-    // fn peek(&self) -> &TokenKind {
-    //     &self.stream[self.cursor + 1].token_type
-    // }
-
     fn match_t(&mut self, t: TokenKind) -> bool {
         if std::mem::discriminant(self.current()) == std::mem::discriminant(&t) {
             self.advance();
             return true;
         }
         return false;
+    }
+
+    fn new_scope(&mut self) {
+        let Some(var) = self.var_name_stack.back() else {
+            panic!("somehow the scope var stack is empty");
+        };
+        self.var_name_stack.push_back(var.clone());
+
+        let Some(reg) = self.reg_name_stack.back() else {
+            panic!("somehow the scope reg stack is empty");
+        };
+        self.reg_name_stack.push_back(reg.clone());
+    }
+
+    fn delete_scope(&mut self) {
+        self.var_name_stack.pop_back();
+        self.reg_name_stack.pop_back();
+    }
+
+    fn add_var(&mut self, var: String) {
+        let Some(set) = self.var_name_stack.back_mut() else {
+            panic!("there is no var scope")
+        };
+        set.insert(var);
+    }
+
+    fn add_reg(&mut self, reg: String) {
+        let Some(set) = self.reg_name_stack.back_mut() else {
+            panic!("there is no reg scope")
+        };
+        set.insert(reg);
+    }
+
+    fn parse(&mut self) -> Node {
+        self.reset();
+        self.program()
     }
 
     fn program(&mut self) -> Node {
@@ -648,6 +699,15 @@ impl Parser {
             panic!("func: expecting identifier")
         };
 
+        self.new_scope();
+
+        if self.fun_name_set.contains(&ident) {
+            let ctx = self.context();
+            panic!("duplicate function name: {} at line {}:{}", ident, ctx.line+1, ctx.line_pos+1);
+        }
+
+        self.fun_name_set.insert(ident.clone());
+
         expect!(self, TokenKind::OpenParen, "func", "(");
 
         let param_list = self.param_list();
@@ -655,6 +715,8 @@ impl Parser {
         expect!(self, TokenKind::CloseParen, "func", ")");
 
         let block = self.block();
+
+        self.delete_scope();
 
         return Node::Function {
             ident,
@@ -683,6 +745,10 @@ impl Parser {
             list.push(ident);
         }
 
+        for param in list.clone().into_iter() {
+            self.add_reg(param)
+        }
+
         return Node::ParamList(list);
     }
 
@@ -702,37 +768,37 @@ impl Parser {
     fn statement(&mut self) -> Node {
         // TODO: change into match statement
         if self.match_t(TokenKind::AUTO) {
-            // TODO: patch auto assignment with all patches on register
             let TokenKind::Identifier(ident) = self.advance().clone() else {
                 panic!("statement_auto: expecting identifier")
             };
 
+            self.add_var(ident.clone());
+
             expect!(self, TokenKind::Assignment, "statement_auto", "=");
-
             let expr = self.expr();
-
             expect!(self, TokenKind::Semicolon, "statement_auto", ";");
-            return Node::Statement(StatementType::Assignment {
+
+            Node::Statement(StatementType::Assignment {
                 assign_type: AssignmentType::Auto,
                 identifier: ident,
                 expression: expr,
-            });
+            })
         } else if self.match_t(TokenKind::REGISTER) {
             let TokenKind::Identifier(ident) = self.advance().clone() else {
                 panic!("statement_register: expecting identifier")
             };
 
-            expect!(self, TokenKind::Assignment, "statement_register", "=");
-            
-            let expr = self.expr();
+            self.add_reg(ident.clone());
 
+            expect!(self, TokenKind::Assignment, "statement_register", "=");
+            let expr = self.expr();
             expect!(self, TokenKind::Semicolon, "statement_register", ";");
 
-            return Node::Statement(StatementType::Assignment {
+            Node::Statement(StatementType::Assignment {
                 assign_type: AssignmentType::Register,
                 identifier: ident,
                 expression: expr,
-            });
+            })
         } else if self.match_t(TokenKind::RETURN) {
             let expr = self.expr();
 
@@ -741,16 +807,18 @@ impl Parser {
             if let ExprType::None = expr {
                 return Node::Statement(StatementType::Return(None));
             }
-            return Node::Statement(StatementType::Return(Some(expr)));
+
+            Node::Statement(StatementType::Return(Some(expr)))
         } else if self.match_t(TokenKind::WHILE) {
             expect!(self, TokenKind::OpenParen, "statement_while", "(");
             let expr = self.expr();
             expect!(self, TokenKind::CloseParen, "statement_while", ")");
             let stmt = self.statement();
-            return Node::Statement(StatementType::While {
+
+            Node::Statement(StatementType::While {
                 expression: expr,
                 statement: Box::new(stmt),
-            });
+            })
         } else if self.match_t(TokenKind::IF) {
             expect!(self, TokenKind::OpenParen, "statement_while", "(");
             let expression = self.expr();
@@ -762,21 +830,22 @@ impl Parser {
                 else_statement = Some(Box::new(self.statement()));
             }
 
-            return Node::Statement(StatementType::If {
+            Node::Statement(StatementType::If {
                 expression,
                 statement: Box::new(stmt),
                 else_statement,
-            });
+            })
         } else {
             let block = self.block();
-
-            if let Node::Empty = block {
+            let stmt = if let Node::Empty = block {
                 let expr = self.expr();
                 expect!(self, TokenKind::Semicolon, "statement_expr", ";");
-                return Node::Statement(StatementType::Expression(expr));
+
+                StatementType::Expression(expr)
             } else {
-                return Node::Statement(StatementType::Block(Box::new(block)));
-            }
+                StatementType::Block(Box::new(block))
+            };
+            Node::Statement(stmt)
         }
     }
 
@@ -791,7 +860,6 @@ impl Parser {
         }
 
         while self.match_t(TokenKind::Assignment) {
-
             let right = self.expr_or();
             expr = ExprType::Binary {
                 op: BinaryType::Assign,
@@ -997,27 +1065,25 @@ impl Parser {
         return self.expr_subscript();
     }
     fn expr_subscript(&mut self) -> ExprType {
-        let left = self.expr_primary();
-        if let ExprType::None = left {
+        let mut expr = self.expr_primary();
+        if let ExprType::None = expr {
             return ExprType::None;
         }
 
-        // TODO: handle multiple/chaining subscript operator
-        // while self.match_t(TokenKind::OpenSquare) {}
-        if !self.match_t(TokenKind::OpenSquare) {
-            return left;
+        while self.match_t(TokenKind::OpenSquare) {
+            let right = Box::new(self.expr());
+            let size_spec = self.size_spec();
+
+            expect!(self, TokenKind::CloseSquare, "expr_subscript", "]");
+
+            expr = ExprType::Subscript {
+                left: Box::new(expr),
+                right,
+                size_spec,
+            };
         }
 
-        let right = Box::new(self.expr());
-        let size_spec = self.size_spec();
-
-        expect!(self, TokenKind::CloseSquare, "expr_subscript", "]");
-
-        return ExprType::Subscript {
-            left: Box::new(left),
-            right,
-            size_spec,
-        };
+        return expr;
     }
     fn expr_primary(&mut self) -> ExprType {
         match self.current().clone() {
@@ -1101,32 +1167,85 @@ fn slice_ascii_u8_to_u64(slice: &[u8]) -> u64 {
     sum
 }
 
+struct Config {
+    print_token: bool,
+    print_ast: bool,
+}
+
+fn print_usage(prog_name: &String) {
+    println!("usage: {} -f <source.b> [-a] [--ast] [-t] [--token]", prog_name);
+}
+
 fn main() {
-    let mut args: Vec<String> = env::args().collect();
+    let args: Vec<String> = env::args().collect();
+
+    let mut config = Config {
+        print_token: false,
+        print_ast: false,
+    };
+
+    let prog_name = &args[0];
 
     if args.len() < 2 {
-        // panic!("usage: {} <source.b>", args[0])
-        args.push("test1.b".to_string());
+        print_usage(prog_name);
+        exit(1);
     }
 
-    let file_path = &args[1];
+    if args.contains(&"-a".to_string()) || args.contains(&"--ast".to_string()) {
+        config.print_ast = true;
+    }
+    if args.contains(&"-t".to_string()) || args.contains(&"--token".to_string()) {
+        config.print_token = true;
+    }
+
+    let file_name: String;
+
+    if let Some(pos) = args.iter().position(|x| x == "-f") {
+        if pos + 1 >= args.len() {
+            print_usage(prog_name);
+            exit(1);
+        }
+
+        file_name = args[pos + 1].clone();
+    } else {
+        print_usage(prog_name);
+        exit(1);
+    }
+
+    let file_path = file_name;
 
     let contents = fs::read(file_path).expect(format!("usage: {} <source.b>", args[0]).as_str());
 
     let mut scanner = Scanner::new(contents);
 
+    let scan_now = Instant::now();
     let result = scanner.scan();
+    let scan_elapsed = scan_now.elapsed();
 
-    print!(
-        "{:?}\n\n",
-        result
+    if config.print_token {
+        let _result_token = result
             .iter()
             .map(|x| &x.token_type)
-            .collect::<Vec<&TokenKind>>()
-    );
+            .collect::<Vec<&TokenKind>>();
+        println!("{:?}", _result_token);
+        println!();
+    }
 
     let mut parser = Parser::new(result);
 
-    let ast = parser.parse();
-    node_printer(&ast, 0);
+    let parse_now = Instant::now();
+    let _ast = parser.parse();
+    let parse_elapsed = parse_now.elapsed();
+
+    if config.print_ast {
+        node_printer(&_ast, 0);
+        println!();
+    }
+
+    println!(
+        "scan_time: {:.2?}, parse_time: {:.2?}, total_time: {:.2?}",
+        scan_elapsed,
+        parse_elapsed,
+        scan_elapsed + parse_elapsed
+    );
 }

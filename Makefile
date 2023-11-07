@@ -5,7 +5,7 @@ OUTFILE := main
 SRC := main.rs
 
 # Specify any additional flags for the Rust compiler
-RUSTFLAGS := -C link-args=-Wl,-zstack-size=16194304
+RUSTFLAGS := 
 
 # Flags for the release build (e.g., optimizations)
 RELEASE_FLAGS := -O -C panic=abort
