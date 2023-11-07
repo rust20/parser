@@ -1,0 +1,64 @@
+program: function*
+function: ident "(" paramlist? ")" block
+paramlist: ident ("," ident)*
+block: "{" statement* "}"
+statement: ("auto" | "register") ident "=" expr ";"
+         | "return" expr? ";"
+         | block
+         | "while" "(" expr ")" statement
+         | "if" "(" expr ")" statement ("else" statement)?
+         | expr ";"
+
+expr: "(" expr ")"
+    | ident "(" arglist? ")"
+    | ident
+    | number
+    | expr_assign
+
+expr_assign: expr "=" expr
+           | expr_logic
+
+expr_assign_p: 
+
+expr_logic: expr "||" expr
+          | expr "&&" expr
+          | expr "|" expr
+          | expr "^" expr
+          | expr "&" expr
+          | expr_eq_ne
+
+expr_eq_ne: expr "==" expr
+          | expr "!=" expr
+          | expr_ineq
+
+expr_ineq: expr "<" expr
+         | expr ">" expr
+         | expr "<=" expr
+         | expr ">=" expr
+         | expr_shift
+
+expr_shift: expr "<<" expr
+          | expr ">>" expr
+          | expr_term
+
+expr_term: expr "+" expr
+         | expr "-" expr
+         | expr_factor
+
+expr_factor: expr "*" expr
+           | expr "/" expr
+           | expr "%" expr
+           | expr_unary
+
+expr_unary: "-" expr
+          | "!" expr
+          | "~" expr
+          | "&" expr
+          | expr_subscript
+
+expr_subscript: expr "[" expr sizespec? "]"
+
+arglist: expr ("," expr)*
+sizespec: "@" number
+ident: r"[a-zA-Z_][a-zA-Z0-9_]*"
+number: r"[0-9]+"
