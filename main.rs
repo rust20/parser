@@ -1,6 +1,5 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::process::exit;
@@ -474,7 +473,7 @@ fn stmt_printer(stmt: &StatementType, level: usize) {
             None => println!("return <empty>"),
         },
         StatementType::Block(block) => {
-            println!("return");
+            println!("block");
             node_printer(block, level + 1)
         }
         StatementType::While {
@@ -578,6 +577,24 @@ macro_rules! expect {
     }};
 }
 
+macro_rules! parser_panic_but_its_actually_panic {
+    ($self:ident, $message:expr) => {{
+        let ctx = $self.context();
+        panic!("[line {}:{}] {}", ctx.line + 1, ctx.line_pos + 1, $message);
+    }};
+}
+
+macro_rules! parser_panic {
+    ($self:ident, $message:expr) => {{
+        let ctx = $self.context();
+        if !cfg!(find_all_error) {
+            panic!("[line {}:{}] {}", ctx.line + 1, ctx.line_pos + 1, $message);
+        }
+        let msg = format!("[line {}:{}] {}", ctx.line + 1, ctx.line_pos + 1, $message);
+        $self.errors.push(msg)
+    }};
+}
+
 #[allow(dead_code)]
 #[derive(Debug)]
 struct Ref {
@@ -587,15 +604,24 @@ struct Ref {
 
 type Item = Rc<RefCell<Ref>>;
 
+#[allow(dead_code)]
+#[derive(Debug)]
+struct FuncData {
+    id: String,
+    params: Vec<String>,
+}
+
 struct Parser {
     stream: Vec<Token>,
     cursor: usize,
-    fun_name_set: HashSet<String>,
+    fun_name_set: HashMap<String, FuncData>,
 
     var_name_map: HashMap<String, Item>,
     reg_name_map: HashMap<String, Item>,
 
     ref_map: Vec<Vec<Item>>,
+
+    errors: Vec<String>,
 }
 
 impl Parser {
@@ -603,10 +629,11 @@ impl Parser {
         Self {
             stream,
             cursor: 0,
-            fun_name_set: HashSet::new(),
+            fun_name_set: HashMap::new(),
             var_name_map: HashMap::new(),
             reg_name_map: HashMap::new(),
             ref_map: Vec::new(),
+            errors: Vec::new(),
         }
     }
 
@@ -633,10 +660,12 @@ impl Parser {
 
     fn reset(&mut self) {
         self.cursor = 0;
-        self.fun_name_set = HashSet::new();
+        self.fun_name_set = HashMap::new();
         self.var_name_map = HashMap::new();
         self.reg_name_map = HashMap::new();
         self.ref_map = Vec::new();
+
+        self.errors = Vec::new();
     }
 
     fn is_end(&self) -> bool {
@@ -717,9 +746,19 @@ impl Parser {
         }
     }
 
+
+    fn print_errors(&self) {
+        for i in &self.errors {
+            println!("{}", i);
+        }
+    }
+
+
     fn parse(&mut self) -> Node {
         self.reset();
-        self.program()
+        let p = self.program();
+        self.print_errors();
+        p
     }
 
     fn program(&mut self) -> Node {
@@ -745,23 +784,28 @@ impl Parser {
 
         self.new_scope();
 
-        if self.fun_name_set.contains(&ident) {
-            let ctx = self.context();
-            panic!(
-                "duplicate function name: {} at line {}:{}",
-                ident,
-                ctx.line + 1,
-                ctx.line_pos + 1
-            );
+        if self.fun_name_set.contains_key(&ident) {
+            let msg = format!("duplicate function name: {}", ident);
+            parser_panic!(self, msg);
         }
 
-        self.fun_name_set.insert(ident.clone());
-
         expect!(self, TokenKind::OpenParen, "func", "(");
-
         let param_list = self.param_list();
-
         expect!(self, TokenKind::CloseParen, "func", ")");
+
+        let params = if let Node::ParamList(ref params) = param_list {
+            params.clone()
+        } else {
+            Vec::new()
+        };
+
+        self.fun_name_set.insert(
+            ident.clone(),
+            FuncData {
+                id: ident.clone(),
+                params,
+            },
+        );
 
         let block = self.block();
 
@@ -913,18 +957,26 @@ impl Parser {
         }
 
         while self.match_t(TokenKind::Assignment) {
-
             if !matches!(expr, ExprType::Identifier(_))
-            && !matches!(expr, ExprType::Unary { op: UnaryType::Addr, expr: _ }) 
-            && !matches!(expr, ExprType::Subscript { left: _, right: _, size_spec: _ })
+                && !matches!(
+                    expr,
+                    ExprType::Unary {
+                        op: UnaryType::Addr,
+                        expr: _
+                    }
+                )
+                && !matches!(
+                    expr,
+                    ExprType::Subscript {
+                        left: _,
+                        right: _,
+                        size_spec: _
+                    }
+                )
             {
-                let ctx = self.context();
-                panic!(
-                    "[line {}:{}] the left-hand side of an assignment must either one of address-of expression(\"&\"), \
-                     subscript expression(\"[]\"), or an identifier",
-                    ctx.line + 1,
-                    ctx.line_pos + 1,
-                );
+                parser_panic!(self,
+                "the left-hand side of an assignment must either one of address-of expression(\"&\"), \
+                subscript expression(\"[]\"), or an identifier");
             }
 
             let right = self.expr_or();
@@ -1101,15 +1153,12 @@ impl Parser {
         return expr;
     }
     fn expr_unary(&mut self) -> ExprType {
-        let mut in_while = false;
-        let mut expr: ExprType = ExprType::None;
 
-        while self.match_t(TokenKind::Minus)
+        if self.match_t(TokenKind::Minus)
             || self.match_t(TokenKind::Bang)
             || self.match_t(TokenKind::Tilde)
             || self.match_t(TokenKind::Band)
         {
-            in_while = true;
             let op = match &self.prev() {
                 TokenKind::Minus => UnaryType::Minus,
                 TokenKind::Bang => UnaryType::Not,
@@ -1118,28 +1167,22 @@ impl Parser {
                 _ => UnaryType::None,
             };
 
-            let e_sub = self.expr_subscript();
+            let e_sub = self.expr_unary();
 
             if let (ExprType::Identifier(ref ident), UnaryType::Addr) = (&e_sub, &op) {
                 if self.is_reg(ident) {
-                    let ctx = self.context();
-                    panic!(
-                        "[line {}:{}] register \"{}\" is not allowed to be an operand of ",
-                        ctx.line + 1,
-                        ctx.line_pos + 1,
-                        ident,
+                    let msg = format!(
+                        "register \"{}\" is not allowed to be an operand of addr-of operator",
+                        ident
                     );
+                    parser_panic!(self, msg);
                 }
             }
 
-            expr = ExprType::Unary {
+            return ExprType::Unary {
                 op,
                 expr: Box::new(e_sub),
             };
-        }
-
-        if in_while {
-            return expr;
         }
 
         return self.expr_subscript();
@@ -1177,30 +1220,41 @@ impl Parser {
                 self.advance();
 
                 if self.match_t(TokenKind::OpenParen) {
-                    if !self.fun_name_set.contains(&ident) {
-                        let ctx = self.context();
-                        panic!(
-                            "expr_primary_func_call: function \"{}\" is not declared: {}:{}",
-                            ident,
-                            ctx.line + 1,
-                            ctx.line_pos + 1,
-                        );
+                    let arglist = self.arg_list();
+
+                    if let Some(func_data) = self.fun_name_set.get(&ident) {
+
+                        let params_len = func_data.params.len();
+                        if let Node::ArgList(ref args) = arglist {
+                            if args.len() != params_len {
+                                let msg = format!(
+                                    "expr_primary_func_call: function \"{}\" is called with mismatching number of arguments (expecting {}, but found {})",
+                                    ident, params_len, args.len(),
+                                );
+                                parser_panic!(self, msg);
+                            }
+                        }
+
+                    } else {
+                        let msg = format!("expr_primary_func_call: function \"{}\" is not declared", ident);
+                        parser_panic!(self, msg);
                     }
 
-                    let arglist = Box::new(self.arg_list());
-                    let node = ExprType::FnCall { ident, arglist };
+
+                    let node = ExprType::FnCall {
+                        ident,
+                        arglist: Box::new(arglist),
+                    };
                     expect!(self, TokenKind::CloseParen, "expr_primary", ")");
                     return node;
                 }
 
                 if !self.is_var(&ident) && !self.is_reg(&ident) {
-                    let ctx = self.context();
-                    panic!(
-                        "expr_primary_identifier: identifier \"{}\" does not exists in this scope: {}:{}",
-                        ident,
-                        ctx.line + 1,
-                        ctx.line_pos + 1,
+                    let msg = format!(
+                        "expr_primary_identifier: identifier \"{}\" does not exists in this scope",
+                        ident
                     );
+                    parser_panic!(self, msg);
                 }
 
                 return ExprType::Identifier(ident);
@@ -1218,7 +1272,13 @@ impl Parser {
     fn arg_list(&mut self) -> Node {
         let mut list = Vec::new();
 
-        list.push(self.expr());
+        let expr = self.expr();
+
+        if let ExprType::None = expr {
+            return Node::ArgList(list);
+        }
+
+        list.push(expr);
 
         while self.match_t(TokenKind::Colon) {
             list.push(self.expr());
@@ -1234,15 +1294,21 @@ impl Parser {
 
         if let TokenKind::Number(number) = self.current().clone() {
             self.advance();
+
+            if let 1 | 2 | 4 | 8 = number {
+            } else {
+                let msg = format!("sizespec: \"{}\" is an invalid size specifiers (only 1, 2, 4, and 8 are allowed)", number);
+                parser_panic!(self, msg);
+            }
+
             return Some(Box::new(Node::SizeSpec(number)));
         } else {
             let ctx = self.context();
-            panic!(
-                "sizespec: expecting a number at line {}:{}, found \"{:?}\" token instead",
-                ctx.line + 1,
-                ctx.line_pos + 1,
+            let msg = format!(
+                "sizespec: expecting a number, but token \"{:?}\" is found instead",
                 ctx.token_type
             );
+            parser_panic_but_its_actually_panic!(self, msg);
         };
     }
 }
@@ -1317,9 +1383,9 @@ fn main() {
         exit(1);
     }
 
-    let file_path = file_name;
+    let file_path = file_name.clone();
 
-    let contents = fs::read(file_path).expect(format!("usage: {} <source.b>", args[0]).as_str());
+    let contents = fs::read(file_path).expect(format!("file '{}' not found", file_name).as_str());
 
     let mut scanner = Scanner::new(contents);
 

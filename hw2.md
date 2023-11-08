@@ -76,7 +76,7 @@ Additional specifications:
 
 - [x] The left-hand side of the assignment operator (`=`) and the operand of the address-of operator (unary `&`) must be a subscript (`a[b]`) or an identifier.
 - [x] Variables declared with `register` and parameters are not permitted as operand of the address-of operator (unary "&").
-- [ ] Valid size specifiers for subscripts are 1, 2, 4, and 8; if omitted, it defaults to 8.
+- [x] Valid size specifiers for subscripts are 1, 2, 4, and 8; if omitted, it defaults to 8.
 - [ ] Defining multiple functions of the same name is an error, as is defining or calling a function with a different number of parameters. (E.g., defining `foo(a)` and calling `foo(1, 2)` is an error.)
 
 Optional operators:
