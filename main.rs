@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::env;
@@ -576,12 +578,27 @@ macro_rules! expect {
     }};
 }
 
+
+
+struct Ref {
+    id: String,
+    count: u32,
+}
+
+type Item = RefCell<Box<Ref>>;
+
 struct Parser {
     stream: Vec<Token>,
     cursor: usize,
-    var_name_stack: VecDeque<HashSet<String>>,
-    reg_name_stack: VecDeque<HashSet<String>>,
+    var_name_stack: Vec<HashSet<String>>,
+    reg_name_stack: Vec<HashSet<String>>,
     fun_name_set: HashSet<String>,
+
+    var_name_set: HashMap<String, Item>,
+    reg_name_set: HashMap<String, Item>,
+
+    ref_map: Vec<Vec<Item>>,
+    stack_depth: u32,
 }
 
 impl Parser {
@@ -589,9 +606,13 @@ impl Parser {
         Self {
             stream,
             cursor: 0,
-            var_name_stack: VecDeque::new(),
-            reg_name_stack: VecDeque::new(),
+            var_name_stack: Vec::new(),
+            reg_name_stack: Vec::new(),
             fun_name_set: HashSet::new(),
+            var_name_set: HashMap::new(),
+            reg_name_set: HashMap::new(),
+            ref_map: Vec::new(),
+            stack_depth: 0,
         }
     }
 
@@ -618,12 +639,12 @@ impl Parser {
 
     fn reset(&mut self) {
         self.cursor = 0;
-        self.var_name_stack = VecDeque::new();
-        self.reg_name_stack = VecDeque::new();
+        self.var_name_stack = Vec::new();
+        self.reg_name_stack = Vec::new();
         self.fun_name_set = HashSet::new();
 
-        self.var_name_stack.push_back(HashSet::new());
-        self.reg_name_stack.push_back(HashSet::new());
+        self.var_name_stack.push(HashSet::new());
+        self.reg_name_stack.push(HashSet::new());
     }
 
     fn is_end(&self) -> bool {
@@ -643,31 +664,98 @@ impl Parser {
     }
 
     fn new_scope(&mut self) {
-        let Some(var) = self.var_name_stack.back() else {
-            panic!("somehow the scope var stack is empty");
-        };
-        self.var_name_stack.push_back(var.clone());
+        self.stack_depth += 1;
+        self.ref_map.push(Vec::new());
 
-        let Some(reg) = self.reg_name_stack.back() else {
-            panic!("somehow the scope reg stack is empty");
-        };
-        self.reg_name_stack.push_back(reg.clone());
+        // let Some(var) = self.var_name_stack.last() else {
+        //     panic!("somehow the scope var stack is empty");
+        // };
+        // self.var_name_stack.push(var.clone());
+        //
+        // let Some(reg) = self.reg_name_stack.last() else {
+        //     panic!("somehow the scope reg stack is empty");
+        // };
+        // self.reg_name_stack.push(reg.clone());
+
+        // self.var_name_stack.push(HashSet::new());
+        // self.reg_name_stack.push(HashSet::new());
+        //
     }
 
     fn delete_scope(&mut self) {
-        self.var_name_stack.pop_back();
-        self.reg_name_stack.pop_back();
+        if self.stack_depth == 0 {
+            panic!("cannot reduce scope any further!");
+        }
+
+        let Some(last_scope) = self.ref_map.last() else {
+            panic!("missing scope");
+        };
+
+        for i in last_scope.iter() {
+            let mut k = i.borrow_mut();
+            let mut var = k.as_mut();
+            if var.count != 0 {
+                var.count -= 1;
+            }
+        }
+
+        self.ref_map.pop();
+
+        // self.var_name_stack.pop();
+        // self.reg_name_stack.pop();
+
+    }
+
+    fn is_var(&self, var: &String) -> bool {
+        // let Some(set) = self.var_name_stack.last() else {
+        //     panic!("there is no var scope")
+        // };
+        // set.contains(var);
+
+        if let Some(i) = self.var_name_set.get(var) {
+            i.borrow().count > 0
+        } else {
+            false
+        }
+
+        // for set in self.var_name_stack.iter().rev() {
+        //     if set.contains(var) {
+        //         return true
+        //     }
+        // }
+        // return false
+
+    }
+
+    fn is_reg(&self, reg: &String) -> bool {
+        // let Some(set) = self.reg_name_stack.last() else {
+        //     panic!("there is no reg scope")
+        // };
+        // set.contains(reg);
+
+        if let Some(i) = self.reg_name_set.get(reg) {
+            i.borrow().count > 0
+        } else {
+            false
+        }
+
+        // for set in self.reg_name_stack.iter().rev() {
+        //     if set.contains(reg) {
+        //         return true
+        //     }
+        // }
+        // return false
     }
 
     fn add_var(&mut self, var: String) {
-        let Some(set) = self.var_name_stack.back_mut() else {
+        let Some(set) = self.var_name_stack.last_mut() else {
             panic!("there is no var scope")
         };
         set.insert(var);
     }
 
     fn add_reg(&mut self, reg: String) {
-        let Some(set) = self.reg_name_stack.back_mut() else {
+        let Some(set) = self.reg_name_stack.last_mut() else {
             panic!("there is no reg scope")
         };
         set.insert(reg);
@@ -758,9 +846,13 @@ impl Parser {
             return Node::Empty;
         }
 
+        self.new_scope();
+
         while !self.match_t(TokenKind::CloseBrace) {
             list.push(self.statement());
         }
+
+        self.delete_scope();
 
         return Node::Block(list);
     }
@@ -1095,12 +1187,34 @@ impl Parser {
             }
             TokenKind::Identifier(ident) => {
                 self.advance();
+
                 if self.match_t(TokenKind::OpenParen) {
+                    if !self.fun_name_set.contains(&ident) {
+                        let ctx = self.context();
+                        panic!(
+                            "expr_primary_func_call: function \"{}\" is not declared: {}:{}",
+                            ident,
+                            ctx.line + 1,
+                            ctx.line_pos + 1,
+                        );
+                    }
+
                     let arglist = Box::new(self.arg_list());
                     let node = ExprType::FnCall { ident, arglist };
                     expect!(self, TokenKind::CloseParen, "expr_primary", ")");
                     return node;
                 }
+
+                if !self.is_var(&ident) && !self.is_reg(&ident) {
+                    let ctx = self.context();
+                    panic!(
+                        "expr_primary_identifier: identifier \"{}\" does not exists in this scope: {}:{}",
+                        ident,
+                        ctx.line + 1,
+                        ctx.line_pos + 1,
+                    );
+                }
+
                 return ExprType::Identifier(ident);
             }
             TokenKind::Number(number) => {
