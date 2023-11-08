@@ -56,8 +56,8 @@ Additional specifications:
 - [x] Whitespace is ignored, except to separate tokens (as in C).
 - [x] Multi-char operators like "||" are never treated as "|" "|", unless where is whitespace in between (as in C).
 - [x] Keywords are "auto" "register" "if" "else" "while" "return"; they are never identifiers.
-- [ ] The callee of function calls must be an unparenthesized identifier and never refers to a variable, even if a variable with the same name exists (NOT as in C).
-- [ ] For identifiers used to refer to variables, the variable must be declared in the current or a parent block; parameters are accessible in the entire function. Variable shadowing in nested scopes is permitted (as in C); identifiers always reference the variable in the most inner scope.
+- [x] The callee of function calls must be an unparenthesized identifier and never refers to a variable, even if a variable with the same name exists (NOT as in C).
+- [x] For identifiers used to refer to variables, the variable must be declared in the current or a parent block; parameters are accessible in the entire function. Variable shadowing in nested scopes is permitted (as in C); identifiers always reference the variable in the most inner scope.
 - [x] Operator precedence and associativity:
 
         14, left-assoc:  []
@@ -74,8 +74,8 @@ Additional specifications:
         3,  left-assoc:  ||
         1,  right-assoc: =
 
-- [ ] The left-hand side of the assignment operator (`=`) and the operand of the address-of operator (unary `&`) must be a subscript (`a[b]`) or an identifier.
-- [ ] Variables declared with `register` and parameters are not permitted as operand of the address-of operator (unary "&").
+- [x] The left-hand side of the assignment operator (`=`) and the operand of the address-of operator (unary `&`) must be a subscript (`a[b]`) or an identifier.
+- [x] Variables declared with `register` and parameters are not permitted as operand of the address-of operator (unary "&").
 - [ ] Valid size specifiers for subscripts are 1, 2, 4, and 8; if omitted, it defaults to 8.
 - [ ] Defining multiple functions of the same name is an error, as is defining or calling a function with a different number of parameters. (E.g., defining `foo(a)` and calling `foo(1, 2)` is an error.)
 
