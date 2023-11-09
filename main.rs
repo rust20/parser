@@ -7,6 +7,113 @@ use std::rc::Rc;
 use std::time::Instant;
 use std::usize;
 
+
+/*
+* Azka Ali Fazagani, Matriculation Number: 03778351
+*
+* # How to run:
+* currently doesn't support input program from stdin (i'm running out of time, maybe i'll send
+* another email with the updated version).
+* to run with optimized version:
+*``` bash
+
+# required for large program because i implemented this parser using recursive descent 
+# and the stack depth can be quite deep.
+ulimit -s unlimited 
+
+make release
+./main -f <sourcecode.b> -a
+
+*```
+* the flag `-a` will print the ast to stdout.
+* you can also add flag `-t` to print all the parsed token.
+*
+* that version will immediately quit after finding one error that doesn't follow provided
+* specification (e.g. it will quit after finding a call to an undefined function).
+*
+* i've also implemented a version where it doesn't immediately quit after detecting one non-syntax
+* error so it can report multiple errors. it can be compiled like this
+*``` bash
+
+make find_all
+./main -f <sourcecode.b> -a # basically the same way to run it
+
+*```
+*
+* # Analysis:
+*
+* all the following benchmark and analysis are done with a program compiled with `make find_all`.
+* the runtime recorded here is captured in my machine as a stand-alone program, and the peak 
+* memory is captured by running the program with `valgrind` and `massif-visualizer` tool. the runtime captured
+* using these tools are vastly longer, so use it only to capture the total memory footprint.
+*
+* the memory footprint provided in this analysis includes the whole program, not just the total
+* memory used by the AST data structure. this does not reflect the actual memory used only by the
+* AST, but with large enough input, it should be enough to estimate the real value.
+*
+* execution time of this parser follows a linear time.
+* by using the provided example program in the homework description, all in the same file, it got
+* the following result:
+*
+* ```bash
+❯ make find_all && ./main -f test_complete.b
+rustc  --cfg find_all_error -O -C panic=abort -o main main.rs
+[line 19:21] expr_primary_func_call: function "foo" is not declared
+[line 20:16] expr_primary_func_call: function "bar" is not declared
+[line 20:23] expr_primary_func_call: function "baf" is not declared
+[line 20:30] expr_primary_func_call: function "baz" is not declared
+scan_time: 19.11µs, parse_time: 35.78µs, total_time: 54.88µs
+```
+* it got peak memory of 35.4 KiB
+* 
+* to estimate the asymptotic run-time of this parser, i used a modified code generated using the 
+* python script provided in the zulip stream.
+*
+* ```python
+m = 1000
+n = 20000
+for k in range(m):
+    print('func'+str(k)+'(a){' + ''.join(f'{{register a{i}=a{(i-1)//2 if i>1 else ""}; '
+                               for i in range(n)) + f'return a+a{n//2}+a{n-1};' +
+          '}' * (n + 1))
+    print()
+```
+* i saved the output into a file, and to check the growth of memory and runtime of this parser, i
+* changed variable `m` into multiple values: 
+* - `m = 1`
+* - `m = 10`
+* - `m = 100`
+* - `m = 1000`
+*
+* the captured runtime is the following :
+```bash
+❯ ./run_test.sh
+rustc  --cfg find_all_error -O -C panic=abort -o main main.rs
+
+# file with huge function
+scan_time: 7.59ms, parse_time: 24.23ms, total_time: 31.82ms
+
+# file containing 10 huge function
+scan_time: 55.79ms, parse_time: 126.11ms, total_time: 181.90ms
+
+# file containing 100 huge function
+scan_time: 497.54ms, parse_time: 1.19s, total_time: 1.69s
+
+# file containing 1000 huge function
+scan_time: 4.85s, parse_time: 10.94s, total_time: 15.79s
+```
+* the memory peak of each input, captured with `valgrind` and `massif-visualizer` are the following
+* - 1    huge function: 29.2    MiB
+* - 10   huge function: 242.4   MiB
+* - 100  huge function: 2.1     GiB
+* - 1000 huge function: 25.8    GiB
+*
+* looking at the growth of `parse_time` for each input, it follows a linear time.
+* similarly, the growth of memory usage peak is also very linear. 
+* conclusion: this parser has approximatly a very linear growth in both memory usage and run time.
+*
+*/
+
 #[derive(Debug, Clone, PartialEq)]
 #[allow(missing_docs)]
 enum TokenKind {

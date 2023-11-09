@@ -1,2 +1,9 @@
 main
 target/
+hw2-03778351-Fazagani
+hw2-03778351-Fazagani.tar.xz
+
+*.out
+massif.*
+
+test_large_*

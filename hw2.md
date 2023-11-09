@@ -77,7 +77,7 @@ Additional specifications:
 - [x] The left-hand side of the assignment operator (`=`) and the operand of the address-of operator (unary `&`) must be a subscript (`a[b]`) or an identifier.
 - [x] Variables declared with `register` and parameters are not permitted as operand of the address-of operator (unary "&").
 - [x] Valid size specifiers for subscripts are 1, 2, 4, and 8; if omitted, it defaults to 8.
-- [ ] Defining multiple functions of the same name is an error, as is defining or calling a function with a different number of parameters. (E.g., defining `foo(a)` and calling `foo(1, 2)` is an error.)
+- [x] Defining multiple functions of the same name is an error, as is defining or calling a function with a different number of parameters. (E.g., defining `foo(a)` and calling `foo(1, 2)` is an error.)
 
 Optional operators:
 - [x] The following binary operators are optional. While it is suggested to implement them, you do not need to and can also stop implementing them in subsequent homeworks. Operator list: `* / % << >> <= >= & ^ |`
